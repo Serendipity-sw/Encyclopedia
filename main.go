@@ -48,7 +48,7 @@ func main() {
 	var threadLock sync.WaitGroup
 	for index, item := range listArray {
 		threadLock.Add(1)
-		go getUserData(item, &threadLock)
+		getUserData(item, &threadLock)
 		if index%10 == 0 {
 			threadLock.Wait()
 		}
