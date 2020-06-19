@@ -121,7 +121,6 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 			saveExcel = append(saveExcel, item)
 		}
 	})
-
 	docQuery.Find(".para-title.level-2").Each(func(i int, elem *goquery.Selection) {
 		var (
 			contentArray []string
@@ -129,11 +128,17 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 		)
 		contentArray = append(contentArray, strings.Replace(elem.Find("h2").Text(), modal.Name, "", -1))
 		for true {
-			nextElector = elem.Next()
+			if nextElector == nil {
+				nextElector = elem.Next()
+			} else {
+				nextElector = nextElector.Next()
+			}
 			className, bo := nextElector.Attr("class")
 			if bo {
 				if className != "anchor-list" {
 					contentArray = append(contentArray, nextElector.Text())
+				} else {
+					break
 				}
 			} else {
 				break
@@ -144,7 +149,7 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 	excelSaveData := make(map[string][][]string)
 	excelSaveData["sheet"] = saveExcel
 	dirPath := fmt.Sprintf("./人物/%s", modal.Name)
-	err = os.Mkdir(dirPath, os.ModePerm)
+	err = os.MkdirAll(dirPath, os.ModePerm)
 	if err != nil {
 		glog.Error("getUserData create dir err! modal: %v dirPath: %s err: %s \n", modal, dirPath, err.Error())
 	}
