@@ -47,10 +47,12 @@ func main() {
 	}
 	var threadLock sync.WaitGroup
 	for index, item := range listArray {
-		threadLock.Add(1)
-		go getUserData(item, &threadLock)
-		if index%10 == 0 {
-			threadLock.Wait()
+		if item.Name == "曾庆银" {
+			threadLock.Add(1)
+			go getUserData(item, &threadLock)
+			if index%10 == 0 {
+				threadLock.Wait()
+			}
 		}
 	}
 	threadLock.Wait()
@@ -78,6 +80,27 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 	}()
 
 	docQuery, err := goquery.NewDocumentFromReader(result.Body)
+	if err != nil {
+		glog.Error("getUserData NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+		return
+	}
+	if strings.Index(docQuery.Find(".lemmaWgt-subLemmaListTitle").Text(), "多义词") >= 0 {
+		docQuery.Find(".body-wrapper ul.para-list a").Each(func(i int, elem *goquery.Selection) {
+			if strings.Index(elem.Text(), modal.Name) >= 0 && (strings.Index(elem.Text(), modal.School) >= 0 || strings.Index(elem.Text(), modal.Unit) >= 0) {
+				href, bo := elem.Attr("href")
+				if bo {
+					httpUrl = fmt.Sprintf("https://baike.baidu.com%s", href)
+					result, err = http.Get(httpUrl)
+					if err != nil {
+						glog.Error("getUserData http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+						return
+					}
+				}
+			}
+		})
+	}
+
+	docQuery, err = goquery.NewDocumentFromReader(result.Body)
 	if err != nil {
 		glog.Error("getUserData NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
 		return
@@ -174,6 +197,17 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 		if err != nil {
 			glog.Error("getUserData img copy err! modal: %v imgSrc: %s err: %s \n", modal, imgSrc, err.Error())
 		}
+	}
+
+	htmlPath := fmt.Sprintf("%s/%s.html", dirPath, modal.Name)
+	f, err := os.Create(htmlPath)
+	if err != nil {
+		glog.Error("getUserData Create img err! modal: %v imgSrc: %s err: %s \n", modal, imgSrc, err.Error())
+		return
+	}
+	_, err = io.Copy(f, result.Body)
+	if err != nil {
+		glog.Error("getUserData img copy err! modal: %v imgSrc: %s err: %s \n", modal, imgSrc, err.Error())
 	}
 
 	glog.Info("getUserData %s run success! \n", modal.Name)
