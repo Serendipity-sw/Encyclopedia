@@ -47,12 +47,10 @@ func main() {
 	}
 	var threadLock sync.WaitGroup
 	for index, item := range listArray {
-		if item.Name == "曾庆银" {
-			threadLock.Add(1)
-			go getUserData(item, &threadLock)
-			if index%10 == 0 {
-				threadLock.Wait()
-			}
+		threadLock.Add(1)
+		go getUserData(item, &threadLock)
+		if index%10 == 0 {
+			threadLock.Wait()
 		}
 	}
 	threadLock.Wait()
@@ -200,6 +198,11 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 	}
 
 	htmlPath := fmt.Sprintf("%s/%s.html", dirPath, modal.Name)
+	result, err = http.Get(httpUrl)
+	if err != nil {
+		glog.Error("getUserData http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+		return
+	}
 	f, err := os.Create(htmlPath)
 	if err != nil {
 		glog.Error("getUserData Create img err! modal: %v imgSrc: %s err: %s \n", modal, imgSrc, err.Error())
