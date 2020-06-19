@@ -18,7 +18,13 @@ type userList struct {
 	School string `json:"school"` //简写
 	Field  string `json:"field"`  //研究领域
 	Year   string `json:"year"`   //年度
+	Url    string `json:"url"`
 }
+
+var (
+	cancelArray     []userList
+	cancelArrayLock sync.RWMutex
+)
 
 func main() {
 	gutil.LogInit(false, "./logs")
@@ -48,8 +54,17 @@ func main() {
 	var threadLock sync.WaitGroup
 	for index, item := range listArray {
 		threadLock.Add(1)
-		getUserData(item, &threadLock)
-		if index%10 == 0 {
+		go getUserData(item, &threadLock)
+		if index%30 == 0 {
+			threadLock.Wait()
+		}
+	}
+	threadLock.Wait()
+
+	for index, item := range cancelArray {
+		threadLock.Add(1)
+		go getUserData(item, &threadLock)
+		if index%30 == 0 {
 			threadLock.Wait()
 		}
 	}
@@ -64,10 +79,15 @@ func main() {
 func getUserData(modal userList, threadLock *sync.WaitGroup) {
 	defer threadLock.Done()
 	var saveExcel [][]string
-	httpUrl := fmt.Sprintf("https://baike.baidu.com/item/%s", modal.Name)
-	result, err := http.Get(httpUrl)
+	httpUrl := ""
+	if modal.Url == "" {
+		httpUrl = fmt.Sprintf("https://baike.baidu.com/item/%s", modal.Name)
+	} else {
+		httpUrl = modal.Url
+	}
+	result, err := httpGet(httpUrl, modal)
 	if err != nil {
-		glog.Error("getUserData http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+		glog.Error("getUserData 1http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
 		return
 	}
 	defer func() {
@@ -82,15 +102,17 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 		glog.Error("getUserData NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
 		return
 	}
+	bo := false
 	if strings.Index(docQuery.Find(".lemmaWgt-subLemmaListTitle").Text(), "多义词") >= 0 {
 		docQuery.Find(".body-wrapper ul.para-list a").Each(func(i int, elem *goquery.Selection) {
 			if strings.Index(elem.Text(), modal.Name) >= 0 && (strings.Index(elem.Text(), modal.School) >= 0 || strings.Index(elem.Text(), modal.Unit) >= 0) {
-				href, bo := elem.Attr("href")
-				if bo {
+				href, bos := elem.Attr("href")
+				bo = bos
+				if bos {
 					httpUrl = fmt.Sprintf("https://baike.baidu.com%s", href)
-					result, err = http.Get(httpUrl)
+					result, err = httpGet(httpUrl, modal)
 					if err != nil {
-						glog.Error("getUserData http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+						glog.Error("getUserData 2http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
 						return
 					}
 				}
@@ -98,11 +120,14 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 		})
 	}
 
-	docQuery, err = goquery.NewDocumentFromReader(result.Body)
-	if err != nil {
-		glog.Error("getUserData NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
-		return
+	if bo {
+		docQuery, err = goquery.NewDocumentFromReader(result.Body)
+		if err != nil {
+			glog.Error("getUserData NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+			return
+		}
 	}
+
 	saveExcel = append(saveExcel, []string{
 		"申请人",
 		modal.Name,
@@ -180,7 +205,7 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 	}
 	imgSrc, bo := docQuery.Find(".wiki-lemma .summary-pic img").Attr("src")
 	if bo {
-		imgResult, err := http.Get(imgSrc)
+		imgResult, err := httpGet(imgSrc, modal)
 		if err != nil {
 			glog.Error("getUserData Get img err! modal: %v imgSrc: %s err: %s \n", modal, imgSrc, err.Error())
 			return
@@ -198,9 +223,9 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 	}
 
 	htmlPath := fmt.Sprintf("%s/%s.html", dirPath, modal.Name)
-	result, err = http.Get(httpUrl)
+	result, err = httpGet(httpUrl, modal)
 	if err != nil {
-		glog.Error("getUserData http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+		glog.Error("getUserData 3http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
 		return
 	}
 	f, err := os.Create(htmlPath)
@@ -214,4 +239,30 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 	}
 
 	glog.Info("getUserData %s run success! \n", modal.Name)
+}
+
+func httpGet(httpUrl string, modal userList) (resp *http.Response, err error) {
+	httpClient := http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			modal.Url = fmt.Sprintf("https://%s", req.URL.Host+req.URL.Path)
+			cancelArrayLock.Lock()
+			cancelArray = append(cancelArray, modal)
+			cancelArrayLock.Unlock()
+			return nil
+		},
+	}
+	res, err := http.NewRequest(http.MethodGet, httpUrl, nil)
+	if err != nil {
+		glog.Error("httpGet NewRequest run err! httpUrl: %s err: %s \n", httpUrl, err.Error())
+		return nil, err
+	}
+	res.Header.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9")
+	res.Header.Add("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8,zh-TW;q=0.7,en-US;q=0.6")
+	res.Header.Add("Cache-Control", "max-age=0")
+	res.Header.Add("Connection", "keep-alive")
+	res.Header.Add("Sec-Fetch-Dest", "document")
+	res.Header.Add("Sec-Fetch-Mode", "navigate")
+	res.Header.Add("Sec-Fetch-Site", "same-origin")
+	res.Header.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.106 Safari/537.36")
+	return httpClient.Do(res)
 }
