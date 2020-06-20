@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/smtc/glog"
@@ -22,8 +23,8 @@ type userList struct {
 }
 
 var (
-	cancelArray     []userList
-	cancelArrayLock sync.RWMutex
+	userListArray []userList
+	bucunzai      []userList
 )
 
 func main() {
@@ -35,40 +36,57 @@ func main() {
 		glog.Error("main excel get data err! path: %s err: %s \n", excelPath, err.Error())
 		return
 	}
-	var listArray []userList
 	for _, sheetArray := range *excelArray {
 		for index, item := range sheetArray {
 			if index == 0 {
 				continue
 			}
-			listArray = append(listArray, userList{
-				Name:   item[1],
-				Unit:   item[2],
-				School: item[3],
-				Field:  item[4],
-				Year:   item[5],
-			})
+			if strings.Index(item[1], "章秀银") >= 0 {
+				userListArray = append(userListArray, userList{
+					Name:   item[1],
+					Unit:   item[2],
+					School: item[3],
+					Field:  item[4],
+					Year:   item[5],
+				})
+			}
 		}
 		break
 	}
 	var threadLock sync.WaitGroup
-	for index, item := range listArray {
+
+	for index, _ := range userListArray {
 		threadLock.Add(1)
-		go getUserData(item, &threadLock)
-		if index%30 == 0 {
+		search(index, &threadLock)
+		if index%10 == 0 {
+			threadLock.Wait()
+		}
+	}
+
+	for index, _ := range userListArray {
+		threadLock.Add(1)
+		getUserData(index, &threadLock)
+		if index%10 == 0 {
 			threadLock.Wait()
 		}
 	}
 	threadLock.Wait()
 
-	for index, item := range cancelArray {
+	for index, _ := range userListArray {
 		threadLock.Add(1)
-		go getUserData(item, &threadLock)
-		if index%30 == 0 {
+		getUserData(index, &threadLock)
+		if index%10 == 0 {
 			threadLock.Wait()
 		}
 	}
 	threadLock.Wait()
+
+	bucunzaiStrin, err := json.Marshal(bucunzai)
+	if err != nil {
+		glog.Error("main Marshal err! list: %v err: %s \n", bucunzai, err.Error())
+	} else {
+		gutil.FileCreateAndWrite(&bucunzaiStrin, "./bucunzai", false)
+	}
 
 	fmt.Println("run success!")
 
@@ -76,77 +94,135 @@ func main() {
 
 }
 
-func getUserData(modal userList, threadLock *sync.WaitGroup) {
+func search(index int, threadLock *sync.WaitGroup) {
+	defer threadLock.Done()
+	httpUrl := fmt.Sprintf("https://baike.baidu.com/search/word?word=%s", userListArray[index].Name)
+	if userListArray[index].Url != "" {
+		httpUrl = userListArray[index].Url
+	}
+	result, err := httpGet(httpUrl, index)
+	if err != nil {
+		glog.Error("search httpGet run err! modal: %v err: %s \n", userListArray[index], err.Error())
+	}
+	defer func() {
+		err = result.Body.Close()
+		if err != nil {
+			glog.Error("search http body close err! modal: %v httpUrl: %s err: %s \n", userListArray[index], httpUrl, err.Error())
+		}
+	}()
+	docQuery, err := goquery.NewDocumentFromReader(result.Body)
+	if err != nil {
+		glog.Error("search NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", userListArray[index], httpUrl, err.Error())
+		return
+	}
+
+	htmlString := docQuery.Text()
+	if strings.Index(htmlString, "抱歉，您所访问的页面不存在") >= 0 {
+		bucunzai = append(bucunzai, userListArray[index])
+		fmt.Println("1不存在", userListArray[index])
+		//time.Sleep(3 * time.Second)
+		//threadLock.Add(1)
+		//search(index, threadLock)
+		return
+	}
+
+	if strings.Index(userListArray[index].Url, "https://baike.baidu.com/search/none?word=") >= 0 {
+		href, bo := docQuery.Find(".spell-correct a").Attr("href")
+		if bo {
+			userListArray[index].Url = href
+		} else {
+			glog.Warn("用户未找到 modal: %v url: %s \n", userListArray[index], userListArray[index].Url)
+			userListArray[index].Url = ""
+		}
+	}
+
+	glog.Info("search run success! modal: %v \n", userListArray[index])
+}
+
+func getUserData(index int, threadLock *sync.WaitGroup) {
 	defer threadLock.Done()
 	var saveExcel [][]string
-	httpUrl := ""
-	if modal.Url == "" {
-		httpUrl = fmt.Sprintf("https://baike.baidu.com/item/%s", modal.Name)
-	} else {
-		httpUrl = modal.Url
-	}
-	result, err := httpGet(httpUrl, modal)
+	httpUrl := userListArray[index].Url
+	result, err := httpGet(httpUrl, index)
 	if err != nil {
-		glog.Error("getUserData 1http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+		glog.Error("getUserData 1http get err! modal: %v httpUrl: %s err: %s \n", userListArray[index], httpUrl, err.Error())
 		return
 	}
 	defer func() {
 		err = result.Body.Close()
 		if err != nil {
-			glog.Error("getUserData http body close err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+			glog.Error("getUserData http body close err! modal: %v httpUrl: %s err: %s \n", userListArray[index], httpUrl, err.Error())
 		}
 	}()
 
 	docQuery, err := goquery.NewDocumentFromReader(result.Body)
 	if err != nil {
-		glog.Error("getUserData NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+		glog.Error("getUserData NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", userListArray[index], httpUrl, err.Error())
 		return
 	}
 	bo := false
 	if strings.Index(docQuery.Find(".lemmaWgt-subLemmaListTitle").Text(), "多义词") >= 0 {
 		docQuery.Find(".body-wrapper ul.para-list a").Each(func(i int, elem *goquery.Selection) {
-			if strings.Index(elem.Text(), modal.Name) >= 0 && (strings.Index(elem.Text(), modal.School) >= 0 || strings.Index(elem.Text(), modal.Unit) >= 0) {
+			if !bo {
 				href, bos := elem.Attr("href")
-				bo = bos
 				if bos {
 					httpUrl = fmt.Sprintf("https://baike.baidu.com%s", href)
-					result, err = httpGet(httpUrl, modal)
+					result, err = httpGet(httpUrl, index)
 					if err != nil {
-						glog.Error("getUserData 2http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+						glog.Error("getUserData 2http get err! modal: %v httpUrl: %s err: %s \n", userListArray[index], httpUrl, err.Error())
 						return
+					}
+					docQuery, err = goquery.NewDocumentFromReader(result.Body)
+					if err != nil {
+						glog.Error("getUserData NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", userListArray[index], httpUrl, err.Error())
+						return
+					}
+					htmlString := docQuery.Text()
+					if strings.Index(htmlString, userListArray[index].School) >= 0 || strings.Index(htmlString, userListArray[index].Unit) >= 0 {
+						bo = true
 					}
 				}
 			}
 		})
 	}
 
-	if bo {
-		docQuery, err = goquery.NewDocumentFromReader(result.Body)
-		if err != nil {
-			glog.Error("getUserData NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
-			return
-		}
+	htmlString := docQuery.Text()
+	if strings.Index(htmlString, "抱歉，您所访问的页面不存在") >= 0 {
+		bucunzai = append(bucunzai, userListArray[index])
+		//fmt.Println("2不存在", userListArray[index])
+		//time.Sleep(3 * time.Second)
+		//threadLock.Add(1)
+		//getUserData(index, threadLock)
+		return
 	}
+
+	//if bo {
+	//	docQuery, err = goquery.NewDocumentFromReader(result.Body)
+	//	if err != nil {
+	//		glog.Error("getUserData NewDocumentFromReader err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+	//		return
+	//	}
+	//}
 
 	saveExcel = append(saveExcel, []string{
 		"申请人",
-		modal.Name,
+		userListArray[index].Name,
 	})
 	saveExcel = append(saveExcel, []string{
 		"依托单位",
-		modal.Unit,
+		userListArray[index].Unit,
 	})
 	saveExcel = append(saveExcel, []string{
 		"简写",
-		modal.School,
+		userListArray[index].School,
 	})
 	saveExcel = append(saveExcel, []string{
 		"研究领域",
-		modal.Field,
+		userListArray[index].Field,
 	})
 	saveExcel = append(saveExcel, []string{
 		"年度",
-		modal.Year,
+		userListArray[index].Year,
 	})
 	saveExcel = append(saveExcel, []string{
 		"简介",
@@ -172,7 +248,7 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 			contentArray []string
 			nextElector  *goquery.Selection
 		)
-		contentArray = append(contentArray, strings.Replace(elem.Find("h2").Text(), modal.Name, "", -1))
+		contentArray = append(contentArray, strings.Replace(elem.Find("h2").Text(), userListArray[index].Name, "", -1))
 		for true {
 			if nextElector == nil {
 				nextElector = elem.Next()
@@ -194,60 +270,57 @@ func getUserData(modal userList, threadLock *sync.WaitGroup) {
 	})
 	excelSaveData := make(map[string][][]string)
 	excelSaveData["sheet"] = saveExcel
-	dirPath := fmt.Sprintf("./人物/%s", modal.Name)
+	dirPath := fmt.Sprintf("./人物/%s", userListArray[index].Name)
 	err = os.MkdirAll(dirPath, os.ModePerm)
 	if err != nil {
-		glog.Error("getUserData create dir err! modal: %v dirPath: %s err: %s \n", modal, dirPath, err.Error())
+		glog.Error("getUserData create dir err! modal: %v dirPath: %s err: %s \n", userListArray[index], dirPath, err.Error())
 	}
-	err = gutil.ExcelSave(&excelSaveData, fmt.Sprintf("%s/%s.xlsx", dirPath, modal.Name))
+	err = gutil.ExcelSave(&excelSaveData, fmt.Sprintf("%s/%s.xlsx", dirPath, userListArray[index].Name))
 	if err != nil {
-		glog.Error("getUserData ExcelSave err! modal: %v dirPath: %s err: %s \n", modal, dirPath, err.Error())
+		glog.Error("getUserData ExcelSave err! modal: %v dirPath: %s err: %s \n", userListArray[index], dirPath, err.Error())
 	}
 	imgSrc, bo := docQuery.Find(".wiki-lemma .summary-pic img").Attr("src")
 	if bo {
-		imgResult, err := httpGet(imgSrc, modal)
+		imgResult, err := httpGet(imgSrc, index)
 		if err != nil {
-			glog.Error("getUserData Get img err! modal: %v imgSrc: %s err: %s \n", modal, imgSrc, err.Error())
+			glog.Error("getUserData Get img err! modal: %v imgSrc: %s err: %s \n", userListArray[index], imgSrc, err.Error())
 			return
 		}
-		imgPath := fmt.Sprintf("%s/%s.jpg", dirPath, modal.Name)
+		imgPath := fmt.Sprintf("%s/%s.jpg", dirPath, userListArray[index].Name)
 		f, err := os.Create(imgPath)
 		if err != nil {
-			glog.Error("getUserData Create img err! modal: %v imgSrc: %s err: %s \n", modal, imgSrc, err.Error())
+			glog.Error("getUserData Create img err! modal: %v imgSrc: %s err: %s \n", userListArray[index], imgSrc, err.Error())
 			return
 		}
 		_, err = io.Copy(f, imgResult.Body)
 		if err != nil {
-			glog.Error("getUserData img copy err! modal: %v imgSrc: %s err: %s \n", modal, imgSrc, err.Error())
+			glog.Error("getUserData img copy err! modal: %v imgSrc: %s err: %s \n", userListArray[index], imgSrc, err.Error())
 		}
 	}
 
-	htmlPath := fmt.Sprintf("%s/%s.html", dirPath, modal.Name)
-	result, err = httpGet(httpUrl, modal)
+	htmlPath := fmt.Sprintf("%s/%s.html", dirPath, userListArray[index].Name)
+	result, err = httpGet(httpUrl, index)
 	if err != nil {
-		glog.Error("getUserData 3http get err! modal: %v httpUrl: %s err: %s \n", modal, httpUrl, err.Error())
+		glog.Error("getUserData 3http get err! modal: %v httpUrl: %s err: %s \n", userListArray[index], httpUrl, err.Error())
 		return
 	}
 	f, err := os.Create(htmlPath)
 	if err != nil {
-		glog.Error("getUserData Create img err! modal: %v imgSrc: %s err: %s \n", modal, imgSrc, err.Error())
+		glog.Error("getUserData Create img err! modal: %v imgSrc: %s err: %s \n", userListArray[index], imgSrc, err.Error())
 		return
 	}
 	_, err = io.Copy(f, result.Body)
 	if err != nil {
-		glog.Error("getUserData img copy err! modal: %v imgSrc: %s err: %s \n", modal, imgSrc, err.Error())
+		glog.Error("getUserData img copy err! modal: %v imgSrc: %s err: %s \n", userListArray[index], imgSrc, err.Error())
 	}
 
-	glog.Info("getUserData %s run success! \n", modal.Name)
+	glog.Info("getUserData %s run success! \n", userListArray[index].Name)
 }
 
-func httpGet(httpUrl string, modal userList) (resp *http.Response, err error) {
+func httpGet(httpUrl string, index int) (resp *http.Response, err error) {
 	httpClient := http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			modal.Url = fmt.Sprintf("https://%s", req.URL.Host+req.URL.Path)
-			cancelArrayLock.Lock()
-			cancelArray = append(cancelArray, modal)
-			cancelArrayLock.Unlock()
+			userListArray[index].Url = fmt.Sprintf("https://%s", req.URL.Host+req.URL.Path)
 			return nil
 		},
 	}
